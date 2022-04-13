@@ -1,0 +1,32 @@
+{
+  "name": "abstract-designs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shuang5531/abstract-designs.git"
+  },
+  "author": "Simon Huang",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/shuang5531/abstract-designs/issues"
+  },
+  "homepage": "https://github.com/shuang5531/abstract-designs#readme",
+  "dependencies": {
+    "three": "^0.139.2"
+  },
+  "devDependencies": {
+    "@types/three": "^0.139.0",
+    "@typescript-eslint/eslint-plugin": "^5.19.0",
+    "@typescript-eslint/parser": "^5.19.0",
+    "eslint": "^8.13.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.26.0",
+    "typescript": "^4.6.3"
+  }
+}
