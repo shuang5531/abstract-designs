@@ -1,7 +1,7 @@
 import {
   Scene, WebGLRenderer, OrthographicCamera, LineBasicMaterial,
   Vector3, BufferGeometry, Line, PlaneGeometry, ShaderMaterial, Mesh,
-  Vector2, FramebufferTexture, RGBAFormat, Color,
+  Vector2, FramebufferTexture, RGBAFormat, Color, PerspectiveCamera,
   SphereGeometry, MeshBasicMaterial, NoBlending,
 } from 'three';
 
@@ -12,77 +12,96 @@ interface Edge {
   endY: number
   line: Line
   lightStrength: number
-  lightStartTime: number
+  lightTimeLeft: number
 }
 
 interface Vertex {
-  x: number
-  y: number
   start: Vector3
   end: Vector3
   actual: Vector3
-  startTime: number
+  offset: Vector3
   duration: number
+  timeLeft: number
   point: Mesh
   lightStrength: number
-  lightStartTime: number
+  lightTimeLeft: number
   spread: boolean
   edges: Edge[]
+  horizontalChecked?: boolean
+  upChecked?: boolean
+  downChecked?: boolean
 }
 
 export interface StepParameters {
   renderer: WebGLRenderer
   // eslint-disable-next-line no-unused-vars
-  randPoint: (x:number, y:number) => Vector3
+  randPoint: () => Vector3
   getDuration: () => number
   edges: Edge[]
   vertices: Vertex[][]
-  camera: OrthographicCamera
+  camera: PerspectiveCamera
+  fxCamera: OrthographicCamera
   material: ShaderMaterial
-  edgeOffset: Vector3
   lineColor: Color
   lightColor: Color
   bufferTexture: { current: FramebufferTexture }
   scene: Scene
-  squareSize: number
+  fxScene: Scene
+  unitSize: number
 }
 
 const origin2d = new Vector2(0, 0);
 const sphereRadius = 3;
 const sphereGeometry = new SphereGeometry(sphereRadius);
-const sphereOffset = new Vector3(0, 0, sphereRadius * 2);
 const spreadDist = 3;
-const spreadTime = 0.25;
+const spreadTime = 0.75;
+const triangleHeight = Math.sqrt(3) / 2;
+
+function degToRad(degrees: number) {
+  return degrees * (Math.PI / 180);
+}
+
+function calcOffset(xAngle:number, yAngle:number, dist: number):Vector3 {
+  return new Vector3(
+    dist * Math.sin(xAngle),
+    dist * Math.sin(yAngle),
+    -dist * Math.cos(xAngle) * Math.cos(yAngle),
+  );
+}
 
 export function setupNeurons(
-  // clearColor: number,
   lineColor: number,
   lightColor: number,
-  squareSize: number,
+  unitSize: number,
   wanderingRadius: number,
   minTransitionTime: number,
   maxTransitionTime: number,
-  canvas?: HTMLCanvasElement,
+  options?: {
+    canvas?: HTMLCanvasElement,
+    designType?: 'grid' | 'triangle',
+  },
 ):[() => void, StepParameters, HTMLCanvasElement] {
+  const { canvas, designType } = { designType: 'grid', ...options };
   const geometry = new BufferGeometry().setFromPoints([
-    new Vector3(0, 0, 0), new Vector3(0, 0, squareSize),
+    new Vector3(0, 0, 0), new Vector3(0, 0, unitSize),
   ]);
-  const edgeOffset = new Vector3(wanderingRadius, wanderingRadius, 0);
   const renderer:WebGLRenderer = new WebGLRenderer({
     canvas,
     antialias: true,
     premultipliedAlpha: false,
+    alpha: true,
   });
   renderer.setSize(
     renderer.domElement.clientWidth,
     renderer.domElement.clientHeight,
     false,
   );
+  renderer.autoClear = false;
   renderer.setClearAlpha(0);
-  // renderer.setClearColor(clearColor, 0);
 
-  const postFXGeometry = new PlaneGeometry(1, 1);
-  const postFXMaterial = new ShaderMaterial({
+  const fxScene = new Scene();
+  const fxGeometry = new PlaneGeometry(1, 1);
+  const fxMaterial = new ShaderMaterial({
     uniforms: {
       sampler: { value: null },
     },
@@ -107,20 +126,13 @@ export function setupNeurons(
     transparent: true,
     blending: NoBlending,
   });
-  const plane = new Mesh(postFXGeometry, postFXMaterial);
-
-  plane.rotateY(Math.PI);
-  plane.rotateZ(Math.PI);
+  const plane = new Mesh(fxGeometry, fxMaterial);
+  plane.position.setZ(-1000);
 
   const scene = new Scene();
-  scene.add(plane);
+  fxScene.add(plane);
 
-  function randPoint(
-    x:number,
-    y:number,
-  ) {
-    const pixelX = x * squareSize;
-    const pixelY = y * squareSize;
+  function randPoint() {
     const u = Math.random();
     const v = Math.random();
     const theta = u * 2 * Math.PI;
@@ -131,8 +143,8 @@ export function setupNeurons(
     const sinPhi = Math.sin(phi);
     const cosPhi = Math.cos(phi);
     return new Vector3(
-      pixelX + r * sinPhi * cosTheta,
-      pixelY + r * sinPhi * sinTheta,
+      r * sinPhi * cosTheta,
+      r * sinPhi * sinTheta,
       r * cosPhi, // z is 0
     );
   }
@@ -141,100 +153,24 @@ export function setupNeurons(
     return minTransitionTime + Math.random() * (maxTransitionTime - minTransitionTime);
   }
 
-  const generateVertex = (x:number, y:number) => {
-    const point = new Mesh(sphereGeometry, new MeshBasicMaterial({ color: lineColor }));
-    scene.add(point);
-    const startPoint = randPoint(x, y);
-    const actual = new Vector3().copy(startPoint).sub(edgeOffset);
-    return {
-      x,
-      y,
-      start: startPoint,
-      end: randPoint(x, y),
-      actual,
-      startTime: 0,
-      duration: getDuration(),
-      point,
-      lightStrength: 0,
-      lightStartTime: 0,
-      spread: false,
-      edges: [],
-    };
-  };
-
   const edges:Edge[] = [];
-  const vertices:Vertex[][] = [[]];
+  const vertices:Vertex[][] = [];
 
-  const drawLine = (
-    x:number,
-    y:number,
-    type:'vertical'|'horizontal'|'diagonal',
-  ) => {
-    const line = new Line(geometry, new LineBasicMaterial({ color: lineColor }));
-    scene.add(line);
-    if (type === 'vertical') {
-      const edge:Edge = {
-        startX: x,
-        startY: y,
-        endX: x,
-        endY: y - 1,
-        line,
-        lightStrength: 0,
-        lightStartTime: 0,
-      };
-      edges.push(edge);
-      vertices[y][x].edges.push(edge);
-      vertices[y - 1][x].edges.push(edge);
-    } else if (type === 'horizontal') {
-      const edge:Edge = {
-        startX: x,
-        startY: y,
-        endX: x - 1,
-        endY: y,
-        line,
-        lightStrength: 0,
-        lightStartTime: 0,
-      };
-      edges.push(edge);
-      vertices[y][x].edges.push(edge);
-      vertices[y][x - 1].edges.push(edge);
-    } else if (type === 'diagonal') {
-      if (Math.random() < 0.5) {
-        const edge:Edge = {
-          startX: x - 1,
-          startY: y,
-          endX: x,
-          endY: y - 1,
-          line,
-          lightStrength: 0,
-          lightStartTime: 0,
-        };
-        edges.push(edge);
-        vertices[y][x - 1].edges.push(edge);
-        vertices[y - 1][x].edges.push(edge);
-      } else {
-        const edge:Edge = {
-          startX: x,
-          startY: y,
-          endX: x - 1,
-          endY: y - 1,
-          line,
-          lightStrength: 0,
-          lightStartTime: 0,
-        };
-        edges.push(edge);
-        vertices[y][x].edges.push(edge);
-        vertices[y - 1][x - 1].edges.push(edge);
-      }
-    }
-  };
+  const camera = new PerspectiveCamera(
+    50,
+    renderer.domElement.clientWidth / renderer.domElement.clientHeight,
+    1,
+    5000,
+  );
 
-  const camera = new OrthographicCamera();
-  camera.left = 0;
-  camera.top = 0;
-  camera.near = 1;
-  camera.far = 1000;
-  camera.position.set(0, 0, 100);
+  const fxCamera = new OrthographicCamera(
+    -renderer.domElement.clientWidth / 2,
+    renderer.domElement.clientWidth / 2,
+    renderer.domElement.clientHeight / 2,
+    -renderer.domElement.clientHeight / 2,
+    1,
+    1000,
+  );
 
   const bufferTexture:{ current: FramebufferTexture } = {
     current: new FramebufferTexture(
@@ -250,71 +186,261 @@ export function setupNeurons(
       renderer.domElement.clientHeight,
       RGBAFormat,
     );
-    renderer.render(scene, camera);
     bufferTexture.current.dispose();
     bufferTexture.current = newTexture;
-    plane.position.set(
-      renderer.domElement.clientWidth / 2,
-      renderer.domElement.clientHeight / 2,
-      -wanderingRadius,
-    );
     plane.scale.set(renderer.domElement.clientWidth, renderer.domElement.clientHeight, 1);
-    if (bufferTexture.current && plane.material instanceof ShaderMaterial) {
-      renderer.copyFramebufferToTexture(origin2d, newTexture);
-      plane.material.uniforms.sampler.value = newTexture;
-    }
     renderer.setSize(
       renderer.domElement.clientWidth,
       renderer.domElement.clientHeight,
       false,
     );
-    camera.right = renderer.domElement.clientWidth;
-    camera.bottom = renderer.domElement.clientHeight;
+    camera.aspect = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
     camera.updateProjectionMatrix();
 
-    let xCells = vertices[0].length - 1;
-    let yCells = vertices.length - 1;
+    fxCamera.left = -renderer.domElement.clientWidth / 2;
+    fxCamera.right = renderer.domElement.clientWidth / 2;
+    fxCamera.top = renderer.domElement.clientHeight / 2;
+    fxCamera.bottom = -renderer.domElement.clientHeight / 2;
+    fxCamera.updateProjectionMatrix();
 
-    const xDifference = Math.ceil(
-      (renderer.domElement.clientWidth + wanderingRadius * 2) / squareSize,
-    ) - xCells;
-    if (xDifference > 0) { // needs to be wider
-      for (let i = 0; i < xDifference; i += 1) {
-        vertices.forEach((verticesRow, index) => {
-          verticesRow.push(generateVertex(verticesRow.length, index));
-          if (index !== 0) {
-            drawLine(verticesRow.length - 2, index, 'vertical');
-            if (index !== vertices.length - 1) { // not last row
-              drawLine(verticesRow.length - 1, index, 'horizontal');
-            }
-            drawLine(verticesRow.length - 1, index, 'diagonal');
-          }
-        });
-      }
-      xCells = vertices[0].length - 1;
-    }
+    const anglePerPixel = camera.fov / renderer.domElement.clientHeight;
+    const dist = Math.sqrt(1 / (2 - 2 * Math.cos(degToRad(anglePerPixel)))); // law of cosines
+    const anglePerSquare = unitSize * anglePerPixel;
 
-    const yDifference = Math.ceil(
-      (renderer.domElement.clientHeight + wanderingRadius * 2) / squareSize,
-    ) - yCells;
-    if (yDifference > 0) { // needs to be taller
-      for (let i = 0; i < yDifference; i += 1) {
-        const newRow:Vertex[] = [];
-        vertices.push(newRow);
-        vertices[vertices.length - 2].forEach((vertex, index) => {
-          newRow.push(generateVertex(vertex.x, vertex.y + 1));
-          if (index !== 0) {
-            drawLine(vertex.x, vertex.y, 'horizontal');
-            if (index !== vertices[0].length - 1) { // not last column
-              drawLine(vertex.x, vertex.y + 1, 'vertical');
-            }
-            drawLine(vertex.x, vertex.y + 1, 'diagonal');
+    const generateVertex = (offset: Vector3):Vertex => {
+      const point = new Mesh(sphereGeometry, new MeshBasicMaterial({ color: lineColor }));
+      scene.add(point);
+      const startPoint = randPoint();
+      const actual = new Vector3().copy(startPoint).add(offset);
+      const duration = getDuration();
+      return {
+        start: startPoint,
+        end: randPoint(),
+        actual,
+        offset,
+        duration,
+        timeLeft: Math.random() * duration,
+        point,
+        lightStrength: 0,
+        lightTimeLeft: 0,
+        spread: false,
+        edges: [],
+      };
+    };
+
+    if (designType === 'grid') {
+      const leftAngle = -anglePerPixel * (renderer.domElement.clientWidth / 2 + wanderingRadius);
+      const topAngle = anglePerPixel * (renderer.domElement.clientHeight / 2 + wanderingRadius);
+      const drawGridLine = (
+        x:number,
+        y:number,
+        type:'vertical'|'horizontal'|'diagonal',
+      ) => {
+        const line = new Line(geometry, new LineBasicMaterial({ color: lineColor }));
+        scene.add(line);
+        if (type === 'vertical') {
+          const edge:Edge = {
+            startX: x,
+            startY: y,
+            endX: x,
+            endY: y - 1,
+            line,
+            lightStrength: 0,
+            lightTimeLeft: 0,
+          };
+          edges.push(edge);
+          vertices[x][y].edges.push(edge);
+          vertices[x][y - 1].edges.push(edge);
+        } else if (type === 'horizontal') {
+          const edge:Edge = {
+            startX: x,
+            startY: y,
+            endX: x - 1,
+            endY: y,
+            line,
+            lightStrength: 0,
+            lightTimeLeft: 0,
+          };
+          edges.push(edge);
+          vertices[x][y].edges.push(edge);
+          vertices[x - 1][y].edges.push(edge);
+        } else if (type === 'diagonal') {
+          if (Math.random() < 0.5) {
+            const edge:Edge = {
+              startX: x - 1,
+              startY: y,
+              endX: x,
+              endY: y - 1,
+              line,
+              lightStrength: 0,
+              lightTimeLeft: 0,
+            };
+            edges.push(edge);
+            vertices[x - 1][y].edges.push(edge);
+            vertices[x][y - 1].edges.push(edge);
+          } else {
+            const edge:Edge = {
+              startX: x,
+              startY: y,
+              endX: x - 1,
+              endY: y - 1,
+              line,
+              lightStrength: 0,
+              lightTimeLeft: 0,
+            };
+            edges.push(edge);
+            vertices[x][y].edges.push(edge);
+            vertices[x - 1][y - 1].edges.push(edge);
           }
-        });
+        }
+      };
+
+      const calcGridOffset = (x:number, y:number):Vector3 => {
+        const horizontalAngle = degToRad(leftAngle + x * anglePerSquare);
+        const verticalAngle = degToRad(topAngle - y * anglePerSquare);
+        return calcOffset(horizontalAngle, verticalAngle, dist);
+      };
+      const minXVertices = Math.ceil(
+        (renderer.domElement.clientWidth + wanderingRadius * 2) / unitSize,
+      ) + 1; // +1 for fencepost
+      const minYVertices = Math.ceil(
+        (renderer.domElement.clientHeight + wanderingRadius * 2) / unitSize,
+      ) + 1; // +1 for fencepost
+      for (let x = 0; x < Math.max(minXVertices, vertices.length); x += 1) {
+        if (!vertices[x]) {
+          vertices.push([]);
+        }
+        for (let y = 0; y < Math.max(minYVertices, (vertices[0] || []).length); y += 1) {
+          if (vertices[x][y]) {
+            vertices[x][y].offset.copy(calcGridOffset(x, y));
+          } else {
+            vertices[x].push(generateVertex(calcGridOffset(x, y)));
+            if (x !== 0 && y !== 0) { // not first column or row
+              if (y !== 1) { // not second row
+                drawGridLine(x, y - 1, 'horizontal');
+              }
+              if (x !== 1) { // not second column
+                drawGridLine(x - 1, y, 'vertical');
+              }
+              drawGridLine(x, y, 'diagonal');
+            }
+          }
+        }
       }
-      yCells = vertices.length - 1;
+    } else if (designType === 'triangle') {
+      const leftAngle = -anglePerPixel * (
+        (renderer.domElement.clientWidth + unitSize) / 2 + wanderingRadius
+      );
+      const topAngle = anglePerPixel * (renderer.domElement.clientHeight / 2 + wanderingRadius);
+      // like this: /_\/_\/_\/_\/_\
+      const minXSections = Math.ceil(
+        (renderer.domElement.clientWidth + wanderingRadius * 2) / (unitSize / 2),
+      ) + 3; // +1 on left side, +1 on right side, +1 for fencepost
+      const minYSections = Math.ceil(
+        (renderer.domElement.clientHeight + wanderingRadius * 2) / triangleHeight / unitSize,
+      ) + 1; // +1 for fencepost
+
+      const drawTriangleLine = (
+        x:number,
+        y:number,
+        type:'up' | 'down' | 'horizontal',
+      ) => {
+        const line = new Line(geometry, new LineBasicMaterial({ color: lineColor }));
+        scene.add(line);
+        if (type === 'horizontal') {
+          const edge:Edge = {
+            startX: x,
+            startY: y,
+            endX: x - 2,
+            endY: y,
+            line,
+            lightStrength: 0,
+            lightTimeLeft: 0,
+          };
+          edges.push(edge);
+          vertices[x][y].horizontalChecked = true;
+          vertices[x][y].edges.push(edge);
+          vertices[x - 2][y].edges.push(edge);
+        } else {
+          // odd and up: 0
+          // even and up: -1
+          // odd and down: +1
+          // even and down: 0
+          let endY = y - 1; // type is 'up' and row is even
+          let check:'upChecked'|'downChecked' = 'upChecked';
+          if (x % 2 === 0) { // odd rows
+            endY += 1;
+          }
+          if (type === 'down') {
+            endY += 1;
+            check = 'downChecked';
+          }
+          const edge:Edge = {
+            startX: x,
+            startY: y,
+            endX: x - 1,
+            endY,
+            line,
+            lightStrength: 0,
+            lightTimeLeft: 0,
+          };
+          edges.push(edge);
+          vertices[x][y][check] = true;
+          vertices[x][y].edges.push(edge);
+          vertices[x - 1][endY].edges.push(edge);
+        }
+      };
+
+      const calcTriangleOffset = (x:number, y:number):Vector3 => {
+        const horizontalAngle = degToRad(leftAngle + (x / 2) * anglePerSquare);
+        if (x % 2 === 0) { // odd rows
+          const verticalAngle = degToRad(
+            topAngle - (y + 0.5) * 2 * triangleHeight * anglePerSquare,
+          );
+          return calcOffset(horizontalAngle, verticalAngle, dist);
+        } // even rows
+        const verticalAngle = degToRad(
+          topAngle - y * 2 * triangleHeight * anglePerSquare,
+        );
+        return calcOffset(horizontalAngle, verticalAngle, dist);
+      };
+
+      for (let x = 0; x < Math.max(minXSections, vertices.length); x += 1) {
+        if (!vertices[x]) {
+          vertices.push([]);
+        }
+        for (
+          let sectionY = 0;
+          sectionY < Math.max(minYSections, vertices[0].length + (vertices[1] || []).length);
+          sectionY += 1
+        ) {
+          const y = Math.floor(sectionY / 2);
+          if (
+            (x % 2 === 0 && sectionY % 2 === 1) // row is on odds and current row is odd
+            || (x % 2 === 1 && sectionY % 2 === 0) // row is on evens and current row is even
+          ) {
+            if (vertices[x][y]) {
+              vertices[x][y].offset.copy(calcTriangleOffset(x, y));
+            } else {
+              vertices[x].push(generateVertex(calcTriangleOffset(x, y)));
+            }
+          } else if (x > 1) { // off vertex checks, nothing to run on x = 0 or 1
+            const prevY = Math.floor((sectionY - 1) / 2);
+            if (sectionY > 1 && !vertices[x][prevY].horizontalChecked) {
+              drawTriangleLine(x, prevY, 'horizontal');
+            }
+            if (sectionY > 0 && !vertices[x - 1][y].upChecked) {
+              drawTriangleLine(x - 1, y, 'up');
+            }
+            if (sectionY < minYSections - 1 && !vertices[x - 1][y].downChecked) {
+              drawTriangleLine(x - 1, y, 'down');
+            }
+          }
+        }
+      }
     }
   };
+
   return [setup, {
     renderer,
     randPoint,
@@ -322,67 +448,77 @@ export function setupNeurons(
     edges,
     vertices,
     camera,
-    material: postFXMaterial,
-    edgeOffset,
+    fxCamera,
+    material: fxMaterial,
     lineColor: new Color(lineColor),
     lightColor: new Color(lightColor),
     bufferTexture,
     scene,
-    squareSize,
+    fxScene,
+    unitSize,
   }, renderer.domElement];
 }
 
-export function renderStep(time:number, lightTime: number, {
+export function renderStep(delta:number, lightTime: number, {
   renderer,
   randPoint,
   getDuration,
   edges,
   vertices,
   camera,
+  fxCamera,
   material,
-  edgeOffset,
   lineColor,
   lightColor,
   bufferTexture,
   scene,
-  squareSize,
+  fxScene,
+  unitSize,
 }: StepParameters) {
-  vertices.forEach((verticesRow) => {
-    verticesRow.forEach((vertex) => {
-      if (time > vertex.startTime + vertex.duration) {
+  vertices.forEach((verticesRow, x) => {
+    verticesRow.forEach((vertex, y) => {
+      // eslint-disable-next-line no-param-reassign
+      vertex.timeLeft -= delta;
+      if (vertex.timeLeft < 0) {
         /* eslint-disable no-param-reassign */
-        vertex.startTime += vertex.duration;
-        vertex.duration = getDuration();
-        vertex.start = vertex.end;
-        vertex.end = randPoint(vertex.x, vertex.y);
         if (Math.random() < 0.1) {
           vertex.lightStrength = spreadDist;
-          vertex.lightStartTime = vertex.startTime;
+          // delta will get removed immediately
+          vertex.lightTimeLeft = vertex.timeLeft + lightTime + delta;
         }
+        vertex.duration = getDuration();
+        vertex.timeLeft += vertex.duration;
+        vertex.start = vertex.end;
+        vertex.end = randPoint();
         /* eslint-enable no-param-reassign */
       }
       vertex.actual.lerpVectors(
-        vertex.start,
         vertex.end,
-        (time - vertex.startTime) / vertex.duration,
-      ).sub(edgeOffset);
+        vertex.start,
+        vertex.timeLeft / vertex.duration,
+      ).add(vertex.offset);
+      // light vertex
       if (vertex.lightStrength && vertex.point.material instanceof MeshBasicMaterial) {
-        const progress = (time - vertex.lightStartTime) / lightTime;
-        if (progress < 1) {
+        // eslint-disable-next-line no-param-reassign
+        vertex.lightTimeLeft -= delta;
+        const countdown = vertex.lightTimeLeft / lightTime; // 1 to 0
+        if (countdown > 0) { // control rounding errors
           vertex.point.material.color.lerpColors(
             lineColor,
             lightColor,
-            (vertex.lightStrength / spreadDist) * (1 - progress),
+            (vertex.lightStrength / spreadDist) * countdown,
           );
           if (
-            vertex.lightStrength > 1
-              && progress > spreadTime
-              && !vertex.spread
+            vertex.lightStrength > 1 // strong enough to spread
+              && countdown < spreadTime // should spread
+              && !vertex.spread // hasn't spread yet
           ) {
             // eslint-disable-next-line no-param-reassign
             vertex.spread = true;
             const nextLightStrength = vertex.lightStrength - 1;
-            const startTime = vertex.lightStartTime + spreadTime * lightTime;
+            const lightTimeLeft = lightTime - (
+              spreadTime * lightTime - vertex.lightTimeLeft
+            ) + delta;
             vertex.edges.forEach((edge) => {
               if (
                 edge.line.material instanceof LineBasicMaterial
@@ -390,25 +526,25 @@ export function renderStep(time:number, lightTime: number, {
               ) {
                 /* eslint-disable no-param-reassign */
                 edge.lightStrength = nextLightStrength;
-                edge.lightStartTime = startTime;
+                edge.lightTimeLeft = lightTimeLeft;
                 /* eslint-ensable no-param-reassign */
                 if (
-                  vertex.x === edge.startX
-                    && vertex.y === edge.startY
-                    && nextLightStrength > vertices[edge.endY][edge.endX]
-                      .lightStrength
-                ) {
-                  vertices[edge.endY][edge.endX].lightStrength = nextLightStrength;
-                  vertices[edge.endY][edge.endX].lightStartTime = startTime;
-                  vertices[edge.endY][edge.endX].spread = false;
-                } else if (
-                  nextLightStrength >= vertices[edge.startY][edge.startX]
+                  x === edge.startX
+                  && y === edge.startY
+                  && nextLightStrength > vertices[edge.endX][edge.endY]
                     .lightStrength
                 ) {
-                  vertices[edge.startY][edge.startX]
+                  vertices[edge.endX][edge.endY].lightStrength = nextLightStrength;
+                  vertices[edge.endX][edge.endY].lightTimeLeft = lightTimeLeft;
+                  vertices[edge.endX][edge.endY].spread = false;
+                } else if (
+                  nextLightStrength >= vertices[edge.startX][edge.startY]
+                    .lightStrength
+                ) {
+                  vertices[edge.startX][edge.startY]
                     .lightStrength = nextLightStrength;
-                  vertices[edge.startY][edge.startX].lightStartTime = startTime;
-                  vertices[edge.startY][edge.startX].spread = false;
+                  vertices[edge.startX][edge.startY].lightTimeLeft = lightTimeLeft;
+                  vertices[edge.startX][edge.startY].spread = false;
                 }
               }
             });
@@ -421,33 +557,37 @@ export function renderStep(time:number, lightTime: number, {
           /* eslint-ensable no-param-reassign */
         }
       }
-      vertex.point.position.copy(vertex.actual).add(sphereOffset);
+      vertex.point.position.copy(vertex.actual);
     });
   });
   edges.forEach((edge) => {
-    const start = vertices[edge.startY][edge.startX];
-    const end = vertices[edge.endY][edge.endX];
+    const start = vertices[edge.startX][edge.startY];
+    const end = vertices[edge.endX][edge.endY];
     edge.line.position.copy(start.actual);
     edge.line.lookAt(end.actual);
-    edge.line.scale.setZ(start.actual.distanceTo(end.actual) / squareSize);
+    edge.line.scale.setZ(start.actual.distanceTo(end.actual) / unitSize);
     if (edge.lightStrength && edge.line.material instanceof LineBasicMaterial) {
-      const progress = (time - edge.lightStartTime) / lightTime;
-      if (progress < 1) {
+      // eslint-disable-next-line no-undef
+      edge.lightTimeLeft -= delta;
+      const countdown = edge.lightTimeLeft / lightTime;
+      if (countdown > 0) {
         edge.line.material.color.lerpColors(
           lineColor,
           lightColor,
-          (edge.lightStrength / spreadDist) * (1 - progress),
+          (edge.lightStrength / spreadDist) * countdown,
         );
       } else {
         edge.line.material.color.set(lineColor);
         /* eslint-disable no-param-reassign */
         edge.lightStrength = 0;
-        edge.lightStartTime = 0;
+        edge.lightTimeLeft = 0;
         /* eslint-ensable no-param-reassign */
       }
     }
   });
   if (bufferTexture) {
+    renderer.clear();
+    renderer.render(fxScene, fxCamera);
     renderer.render(scene, camera);
     renderer.copyFramebufferToTexture(origin2d, bufferTexture.current);
     material.uniforms.sampler.value = bufferTexture.current;

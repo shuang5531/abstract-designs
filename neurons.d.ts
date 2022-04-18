@@ -1,4 +1,4 @@
-import { Scene, WebGLRenderer, OrthographicCamera, Vector3, Line, ShaderMaterial, Mesh, FramebufferTexture, Color } from 'three';
+import { Scene, WebGLRenderer, OrthographicCamera, Vector3, Line, ShaderMaterial, Mesh, FramebufferTexture, Color, PerspectiveCamera } from 'three';
 interface Edge {
     startX: number;
     startY: number;
@@ -6,39 +6,45 @@ interface Edge {
     endY: number;
     line: Line;
     lightStrength: number;
-    lightStartTime: number;
+    lightTimeLeft: number;
 }
 interface Vertex {
-    x: number;
-    y: number;
     start: Vector3;
     end: Vector3;
     actual: Vector3;
-    startTime: number;
+    offset: Vector3;
     duration: number;
+    timeLeft: number;
     point: Mesh;
     lightStrength: number;
-    lightStartTime: number;
+    lightTimeLeft: number;
     spread: boolean;
     edges: Edge[];
+    horizontalChecked?: boolean;
+    upChecked?: boolean;
+    downChecked?: boolean;
 }
 export interface StepParameters {
     renderer: WebGLRenderer;
-    randPoint: (x: number, y: number) => Vector3;
+    randPoint: () => Vector3;
     getDuration: () => number;
     edges: Edge[];
     vertices: Vertex[][];
-    camera: OrthographicCamera;
+    camera: PerspectiveCamera;
+    fxCamera: OrthographicCamera;
     material: ShaderMaterial;
-    edgeOffset: Vector3;
     lineColor: Color;
     lightColor: Color;
     bufferTexture: {
         current: FramebufferTexture;
     };
     scene: Scene;
-    squareSize: number;
+    fxScene: Scene;
+    unitSize: number;
 }
-export declare function setupNeurons(lineColor: number, lightColor: number, squareSize: number, wanderingRadius: number, minTransitionTime: number, maxTransitionTime: number, canvas?: HTMLCanvasElement): [() => void, StepParameters, HTMLCanvasElement];
-export declare function renderStep(time: number, lightTime: number, { renderer, randPoint, getDuration, edges, vertices, camera, material, edgeOffset, lineColor, lightColor, bufferTexture, scene, squareSize, }: StepParameters): void;
+export declare function setupNeurons(lineColor: number, lightColor: number, unitSize: number, wanderingRadius: number, minTransitionTime: number, maxTransitionTime: number, options?: {
+    canvas?: HTMLCanvasElement;
+    designType?: 'grid' | 'triangle';
+}): [() => void, StepParameters, HTMLCanvasElement];
+export declare function renderStep(delta: number, lightTime: number, { renderer, randPoint, getDuration, edges, vertices, camera, fxCamera, material, lineColor, lightColor, bufferTexture, scene, fxScene, unitSize, }: StepParameters): void;
 export {};
