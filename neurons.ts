@@ -70,8 +70,8 @@ function calcOffset(xAngle:number, yAngle:number, dist: number):Vector3 {
 }
 
 export function setupNeurons(
-  lineColor: number,
-  lightColor: number,
+  lineColor: number | string,
+  lightColor: number | string,
   unitSize: number,
   wanderingRadius: number,
   minTransitionTime: number,
@@ -481,7 +481,7 @@ export function renderStep(delta:number, lightTime: number, {
       vertex.timeLeft -= delta;
       if (vertex.timeLeft < 0) {
         /* eslint-disable no-param-reassign */
-        if (Math.random() < 0.1) {
+        if (Math.random() < 0.5) { // frequency
           vertex.lightStrength = spreadDist;
           // delta will get removed immediately
           vertex.lightTimeLeft = vertex.timeLeft + lightTime + delta;

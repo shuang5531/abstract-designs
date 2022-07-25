@@ -18,10 +18,10 @@
   },
   "homepage": "https://github.com/shuang5531/abstract-designs#readme",
   "dependencies": {
-    "three": "^0.139.2"
+    "three": "^0.142.0"
   },
   "devDependencies": {
-    "@types/three": "^0.139.0",
+    "@types/three": "^0.141.0",
     "@typescript-eslint/eslint-plugin": "^5.19.0",
     "@typescript-eslint/parser": "^5.19.0",
     "eslint": "^8.13.0",
